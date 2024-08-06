@@ -1,4 +1,7 @@
 import jax
+
+jax.config.update("jax_enable_x64", True)
+
 import jax.numpy as jnp
 from functools import partial
 
@@ -7,6 +10,7 @@ from jax.experimental import mesh_utils
 from jax.experimental.shard_map import shard_map
 
 import numpy
+
 
 @jax.jit
 def parallel_pair(A, B): ### 7/31/2024
@@ -60,4 +64,4 @@ def jdist(A, B, Dtype=jnp.float16):
 
     D_ij  = cpu_calculation().block_until_ready() ### numpy is too slow, do this operation in jax
     D_ij += jax.device_put( parallel_pair(R_, B_).block_until_ready(), jax.devices("cpu")[0])[:R.shape[0],:B.shape[0]]
-    return D_ij
+    return numpy.asarray(D_ij)
