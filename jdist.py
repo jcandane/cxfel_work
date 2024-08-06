@@ -56,7 +56,7 @@ def jdist(A, B, Dtype=jnp.float16):
     mesh_    = Mesh(numpy.array(jax.devices()).reshape((len(jax.devices()), 1)), axis_names=('i', 'j'))
 
     def cpu_calculation():
-        return jnp.sum(A ** 2, axis=1)[:, None] + jnp.sum(B ** 2, axis=1)[None, :]
+        return jnp.sum(R ** 2, axis=1)[:, None] + jnp.sum(B ** 2, axis=1)[None, :]
 
     ### shard & replicate on 4 GPUs version "_" jax.Arrays
     R_ = jax.device_put(sharded_padding(R, len(jax.devices())), NamedSharding(mesh_, P('i', 'j'))) ### pad then place for both first dimensions....
