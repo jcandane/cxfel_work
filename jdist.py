@@ -1,47 +1,27 @@
 import jax
-
-jax.config.update("jax_enable_x64", True)
-
 import jax.numpy as jnp
-from jax.sharding import Mesh, PartitionSpec as P
-from jax.experimental import mesh_utils
-from jax.experimental.shard_map import shard_map
 from functools import partial
 
-####
-import os
-os.environ["XLA_FLAGS"] = "--xla_force_host_platform_device_count=" + str(4)
-print(jax.devices("cpu"))
+from jax.sharding import Mesh, NamedSharding, PartitionSpec as P
+from jax.experimental import mesh_utils
+from jax.experimental.shard_map import shard_map
 
-######################################################
-
-devices = mesh_utils.create_device_mesh((len(jax.devices()), 1))
-mesh    = Mesh(devices, axis_names=('i', 'j'))
+import numpy
 
 @jax.jit
-def kernel(v_x, v_y, hps=jnp.array([])):
-    #return jnp.dot(v_x, v_y)
-    return jnp.linalg.norm(v_x - v_y)
+def parallel_pair(A, B): ### 7/31/2024
 
-@jax.jit
-def embed_array(small, big):
-    """ embed a small array into a bigger array
-    """
-    start  = tuple( 0          for i in range( small.ndim )       )
-    end    = tuple( s + d      for s,d in zip(start, small.shape) )
-    slices = tuple( slice(s,e) for s,e in zip(start, end)         )
-    return big.at[slices].set(small)
-
-#### mesh has to be defined before defining the entire function!!!
-@jax.jit
-def parallel_pair(A, B, kernel=kernel):
-
-    devices = mesh_utils.create_device_mesh((len(jax.devices()), 1))
+    devices = mesh_utils.create_device_mesh((len(jax.devices()), 1), devices=jax.devices())
     mesh    = Mesh(devices, axis_names=('i', 'j'))
+
+    @jax.jit
+    def kernel(v_x, v_y, hps=jnp.array([])):
+        return -2.*jnp.dot(v_x, v_y)
+        #return jnp.linalg.norm(v_x - v_y)
 
     @partial(jax.vmap, in_axes=(None, 0))
     def matrix_row(v_x, R_ix):
-        return kernel(v_x, R_ix)
+        return kernel(v_x, R_ix) #+ v_x + R_ix ## add v_x[None,:] 
 
     @partial(shard_map, mesh=mesh, in_specs=(P('i'), P(None)), out_specs=P('i'))
     def batched_pairwise(A_batch, B):
@@ -49,43 +29,35 @@ def parallel_pair(A, B, kernel=kernel):
 
     return batched_pairwise(A, B)
 
-
-
-
-
-
-
-def jjdist(a, b): ### NOT needed if taken into accout by jdist : Callable[numpy]
+def sharded_padding(A, l):
     """
-    GIVEN > a,b : jnp.ndarray[:,:]
-    GET >  c : jnp.ndarray[:,:]
-    """
-    de    = jnp.ceil( jnp.asarray( a.shape ) / jnp.array( list(mesh.shape.values()) ) ).astype(int)
-    large = jax.numpy.zeros( jnp.array( list(mesh.shape.values()) )  * de , dtype=a.dtype )
-
-    return parallel_pair( embed_array(a, large) , b )[:a.shape[0],:]
-
-import numpy
-
-def jdist(A,B, par=16): ### now we have to determine the partition-size,
-    ### est. max memory per device....
-    ### perhaps a for-loop to try different partitions to see what works.... aim for par=2
-    """
-    GIVEN > A,B : np.ndarray[N,D] (N samples & D features)
-            par : int (the number of seqential partitions)
-    GET > distance_matrix : np.ndarray[:,:]
+    A:jax.Array 
+    l:int (sharding dimension)
+    GET>
+    B:jax.Array (such that B.shape[0] % l = 0)
     """
 
-    ### create jax Device-Mesh
-    #devices = mesh_utils.create_device_mesh((4, 1))
-    #mesh    = Mesh(devices, axis_names=('i', 'j'))
+    correction = (l - (A.shape[0] % l)) + A.shape[0]
+    B = jnp.zeros((correction, A.shape[1]), dtype=A.dtype)
+    B = B.at[:A.shape[0],:].set(A)
+    return B
 
-    C=[]
-    for i in range(par): ## divide B into pieces (each which divide 4?)
-        ## CPU -> GPU
-        a = jnp.asarray( A )
-        b = jnp.asarray( B[(B.shape[0]*(i))//par:(B.shape[0]*(i+1))//par,:] )
-        
-        ## carry back from GPU -> CPU
-        C.append( numpy.asarray( jjdist(a, b) ) )
-    return numpy.concatenate(C, axis=1)
+######==========
+def jdist(A, B, Dtype=jnp.float16):
+
+    ### move numpy.arrays (on CPU) -> jax.Arrays (on CPU)
+    R  = jax.device_put(A.astype(Dtype), jax.devices("cpu")[0])
+    B  = jax.device_put(B.astype(Dtype), jax.devices("cpu")[0])
+    
+    mesh_    = Mesh(numpy.array(jax.devices()).reshape((len(jax.devices()), 1)), axis_names=('i', 'j'))
+
+    def cpu_calculation():
+        return jnp.sum(A ** 2, axis=1)[:, None] + jnp.sum(B ** 2, axis=1)[None, :]
+
+    ### shard & replicate on 4 GPUs version "_" jax.Arrays
+    R_ = jax.device_put(sharded_padding(R, len(jax.devices())), NamedSharding(mesh_, P('i', 'j'))) ### pad then place for both first dimensions....
+    B_ = jax.device_put(B, NamedSharding(mesh_, P(None)))
+
+    D_ij  = cpu_calculation().block_until_ready() ### numpy is too slow, do this operation in jax
+    D_ij += jax.device_put( parallel_pair(R_, B_).block_until_ready(), jax.devices("cpu")[0])[:R.shape[0],:B.shape[0]]
+    return D_ij
