@@ -21,7 +21,6 @@ def parallel_pair(A, B): ### 7/31/2024
     @jax.jit
     def kernel(v_x, v_y, hps=jnp.array([])):
         return -2.*jnp.dot(v_x, v_y)
-        #return jnp.linalg.norm(v_x - v_y)
 
     @partial(jax.vmap, in_axes=(None, 0))
     def matrix_row(v_x, R_ix):
