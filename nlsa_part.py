@@ -15,7 +15,7 @@ def k_neighbor(D_IJ, k):
 
     ### get sparse data
     j    = j[:,:k].reshape(-1)
-    i    = (np.arange( Ds_IJ.shape[0] )[None,:] * np.ones(k, dtype=j.dtype)[:,None]).reshape(-1)
+    i    = (np.arange( Ds_IJ.shape[0] )[:,None] * np.ones(k, dtype=j.dtype)[None,:]).reshape(-1)
     data = Ds_IJ[:,:k].reshape(-1)
     return coo_matrix((data, (i,j)), shape=D_IJ.shape)
 
