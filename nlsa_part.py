@@ -3,6 +3,7 @@ os.system("wget https://raw.githubusercontent.com/jcandane/cxfel_work/main/jdist
 
 from jdist import jdist
 from scipy.sparse import coo_matrix
+from scipy.signal import convolve2d
 
 def sna(A, c):
     return convolve2d(A, np.eye(c), mode='valid')
